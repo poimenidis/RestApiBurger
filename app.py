@@ -23,8 +23,18 @@ def token_required(f):
     @wraps(f)
     def decorated(*args,**kwargs):
         token = None
-        if 'x-access-token' in request.headers:
-            token = request.headers['x-access-token']
+        #for url: http://127.0.0.1:5000/user?token=...
+        if 'token' in request.args:
+            token = request.args.get('token')
+            try:
+                data = jwt.decode(token, 'SECRET_KEY', algorithms=['HS256'])
+                current_user = User.query.filter_by(public_id = data['public_id']).first()
+                return f(current_user,*args,**kwargs)
+            except:
+                return jsonify({'message' : token})
+        #for postman where we put token in header
+        elif 'token' in request.headers:
+            token = request.headers['token']
             try:
                 data = jwt.decode(token, 'SECRET_KEY', algorithms=['HS256'])
                 current_user = User.query.filter_by(public_id = data['public_id']).first()
