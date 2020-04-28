@@ -1,9 +1,12 @@
-from flask import Flask, request, jsonify
+from functools import wraps
+
+from flask import Flask, request, jsonify, make_response
 from flask_sqlalchemy import SQLAlchemy
 from flask_marshmallow import Marshmallow
 import os
 import uuid
 from werkzeug.security import generate_password_hash, check_password_hash
+import jwt
 
 #Init app
 app = Flask(__name__)
@@ -15,6 +18,22 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 # Init marsh
 ma = Marshmallow(app)
+
+def token_required(f):
+    @wraps(f)
+    def decorated(*args,**kwargs):
+        token = None
+        if 'x-access-token' in request.headers:
+            token = request.headers['x-access-token']
+            try:
+                data = jwt.decode(token, 'SECRET_KEY', algorithms=['HS256'])
+                current_user = User.query.filter_by(public_id = data['public_id']).first()
+                return f(current_user,*args,**kwargs)
+            except:
+                return jsonify({'message' : token})
+
+    return decorated
+
 
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -55,7 +74,8 @@ users_schema = UserSchema(many=True)
 # Post:
 
 @app.route('/burger', methods=['POST'])
-def add_product():
+@token_required
+def add_product(current_user):
     name = request.json['name']
     description = request.json['description']
     price = request.json['price']
@@ -79,18 +99,21 @@ def add_user():
 
 # Gets
 @app.route('/burger', methods=['GET'])
-def get_products():
+@token_required
+def get_products(current_user):
     all_products = Burger.query.all()
     result = products_schema.dump(all_products)
     return products_schema.jsonify(result)
 
 @app.route('/burger/<burger_id>', methods=['GET'])
-def get_product_id(burger_id):
+@token_required
+def get_product_id(current_user,burger_id):
     product = Burger.query.get(burger_id)
     return product_schema.jsonify(product)
 
 @app.route('/user', methods=['GET'])
-def get_users():
+@token_required
+def get_users(current_user):
 
     result = []
     all_users = User.query.all()
@@ -106,7 +129,8 @@ def get_users():
     return users_schema.jsonify(result)
 
 @app.route('/user/<public_id>', methods=['GET'])
-def get_user_id(public_id):
+@token_required
+def get_user_id(current_user,public_id):
     user = User.query.filter_by(public_id=public_id).first()
     user_data = {}
     user_data['public_id'] = user.public_id
@@ -117,7 +141,8 @@ def get_user_id(public_id):
 
 # Put
 @app.route('/burger/<id>', methods=['PUT'])
-def put_product_id(id):
+@token_required
+def put_product_id(current_user,id):
     product = Burger.query.get(id)
 
     product.name = request.json['name']
@@ -130,7 +155,8 @@ def put_product_id(id):
     return product_schema.jsonify(product)
 
 @app.route('/user/<public_id>', methods=['PUT'])
-def put_user_id(public_id):
+@token_required
+def put_user_id(current_user,public_id):
     user = User.query.filter_by(public_id=public_id).first()
 
     user.name = request.json['name']
@@ -141,7 +167,8 @@ def put_user_id(public_id):
 
 # Delete
 @app.route('/burger/<id>', methods=['DELETE'])
-def delete_product_id(id):
+@token_required
+def delete_product_id(current_user,id):
     product = Burger.query.get(id)
 
     db.session.delete(product)
@@ -152,7 +179,8 @@ def delete_product_id(id):
 
 
 @app.route('/user/<public_id>', methods=['DELETE'])
-def delete_user_id(public_id):
+@token_required
+def delete_user_id(current_user,public_id):
     user = User.query.filter_by(public_id=public_id).first()
 
     db.session.delete(user)
@@ -161,7 +189,8 @@ def delete_user_id(public_id):
     return user_schema.jsonify(user)
 
 @app.route('/user', methods=['DELETE'])
-def delete_users():
+@token_required
+def delete_users(current_user):
     all_users = User.query.all()
 
     for user in all_users:
@@ -170,6 +199,26 @@ def delete_users():
     db.session.commit()
 
     return jsonify({'message': 'all users have been deleted'})
+
+
+@app.route('/login')
+def login():
+    auth = request.authorization
+
+    if not auth or not auth.username or not auth.password:
+        return make_response("Could not verify", 401, {'WWW-AUTHENTICATE' : 'Basic realm= "Login required"'})
+
+    user = User.query.filter_by(name= auth.username).first()
+
+    if not user:
+        return make_response("Could not verify", 401, {'WWW-AUTHENTICATE' : 'Basic realm= "Login required"'})
+
+    if check_password_hash(user.password, auth.password):
+        token = jwt.encode({'public_id': user.public_id}, 'SECRET_KEY', algorithm='HS256')
+        return jsonify({'token': token.decode('utf-8')})
+
+    return make_response("Could not verify", 401, {'WWW-AUTHENTICATE' : 'Basic realm= "Login required"'})
+
 
 # Run Server
 if __name__ == '__main__':
